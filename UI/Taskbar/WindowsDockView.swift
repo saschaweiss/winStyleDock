@@ -1,3 +1,4 @@
+// UI/Taskbar/WindowsDockView.swift
 import SwiftUI
 import AppKit
 import ApplicationServices
@@ -11,27 +12,50 @@ struct WindowsDockView: View {
     @State private var hoveredID: UUID?
 
     var body: some View {
-        let windowsForScreen = scanner.windows.filter { $0.screen == screen }
+        let windowsForScreen = scanner.windows.filter { sameDisplay($0.screen, screen) }
         let grouped = groupedByAppPreservingOrder(windowsForScreen)
 
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: theme.taskbar.itemSpacing) {
-                ForEach(grouped.indices, id: \.self) { groupIndex in
-                    let group = grouped[groupIndex]
-                    HStack(spacing: theme.taskbar.groupGap) {
-                        ForEach(group.windows, id: \.id) { win in
-                            windowButton(win)
+            if grouped.isEmpty {
+                // Dezent: leerer Zustand zum Debuggen
+                HStack {
+                    Text("Keine Fenster gefunden")
+                        .foregroundColor(.white.opacity(0.6))
+                        .font(.system(size: 12))
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, theme.taskbar.horizontalPadding)
+                .frame(height: theme.taskbar.barHeight)
+            } else {
+                HStack(spacing: theme.taskbar.itemSpacing) {
+                    ForEach(grouped.indices, id: \.self) { groupIndex in
+                        let group = grouped[groupIndex]
+                        HStack(spacing: theme.taskbar.groupGap) {
+                            ForEach(group.windows, id: \.id) { win in
+                                windowButton(win)
+                            }
                         }
                     }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, theme.taskbar.horizontalPadding)
+                .padding(.vertical, theme.taskbar.verticalPadding)
+                .frame(height: theme.taskbar.barHeight)
             }
-            .padding(.horizontal, theme.taskbar.horizontalPadding)
-            .padding(.vertical, theme.taskbar.verticalPadding)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .frame(height: theme.taskbar.barHeight)
         .background(theme.colors.barBackground)
         .ignoresSafeArea(edges: .bottom)
+        // ---- Debug-Ausgabe hierhin verlegt (kein View-Builder-Konflikt) ----
+        .onAppear {
+            print("Screen \(displayID(for: screen) ?? 0): \(windowsForScreen.count) Fenster")
+        }
+        .onReceive(scanner.$windows) { _ in
+            let count = scanner.windows.filter { sameDisplay($0.screen, screen) }.count
+            print("Screen \(displayID(for: screen) ?? 0): \(count) Fenster")
+        }
+        // --------------------------------------------------------------------
     }
 
     // MARK: - Einzelner Button
@@ -153,9 +177,10 @@ struct WindowsDockView: View {
             &closeBtnRef
         )
 
-        if copyErr == AXError.success, let btn = closeBtnRef {
+        if copyErr == AXError.success, let btnRef = closeBtnRef {
             // Button „drücken“
-            let pressErr = AXUIElementPerformAction(btn as! AXUIElement, kAXPressAction as CFString)
+            let btn = unsafeBitCast(btnRef, to: AXUIElement.self)
+            let pressErr = AXUIElementPerformAction(btn, kAXPressAction as CFString)
             if pressErr != AXError.success {
                 // Fallback: App freundlich beenden
                 var pid: pid_t = 0
@@ -177,5 +202,15 @@ struct WindowsDockView: View {
             return icon
         }
         return nil
+    }
+
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return (screen.deviceDescription[key] as? NSNumber).map { CGDirectDisplayID($0.uint32Value) }
+    }
+
+    private func sameDisplay(_ a: NSScreen, _ b: NSScreen) -> Bool {
+        guard let da = displayID(for: a), let db = displayID(for: b) else { return false }
+        return da == db
     }
 }
