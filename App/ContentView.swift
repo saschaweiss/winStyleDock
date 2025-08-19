@@ -12,9 +12,11 @@ struct ContentView: View {
                 .frame(maxWidth: 420)
 
             HStack(spacing: 10) {
-                Button("Einstellungen öffnen") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                // ✅ Offizieller Weg, öffnet die Settings-Scene
+                SettingsLink {
+                    Label("Einstellungen öffnen", systemImage: "gearshape")
                 }
+
                 Button("Neu scannen") {
                     NotificationCenter.default.post(name: .init("WinStyleDock.TriggerScan"), object: nil)
                 }
@@ -25,6 +27,4 @@ struct ContentView: View {
     }
 }
 
-#Preview {
-    ContentView()
-}
+#Preview { ContentView() }
