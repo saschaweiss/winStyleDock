@@ -1,26 +1,14 @@
 import SwiftUI
 import AppKit
-import Combine
+import Defaults
 
+/// Zentrale Settings-Quelle für die UI.
+/// Speichert/liest intern über `Defaults` (statt eigenem UserDefaults-Code).
+@MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
-    private enum Keys {
-        static let activeColor      = "settings.activeColor"
-        static let inactiveColor    = "settings.inactiveColor"
-        static let normalColor      = "settings.normalColor"
-        static let backgroundColor  = "settings.backgroundColor"
-        static let buttonMaxWidth   = "settings.buttonMaxWidth"
-        static let buttonPadding    = "settings.buttonPadding"
-        static let buttonSpacing    = "settings.buttonSpacing"
-        static let pollInterval     = "settings.pollInterval"
-        static let groupByApp       = "settings.groupByApp"
-        static let showIcons        = "settings.showIcons"
-    }
-
-    private let ud = UserDefaults.standard
-
-    // MARK: - Published Properties
+    // MARK: - Published Properties (wie gehabt in deiner UI)
     @Published var activeColor: Color
     @Published var inactiveColor: Color
     @Published var normalColor: Color
@@ -33,58 +21,98 @@ final class AppSettings: ObservableObject {
     @Published var groupByApp: Bool
     @Published var showIcons: Bool
 
-    private var cancellables: Set<AnyCancellable> = []
-
-    // MARK: - Init
+    // MARK: - Init (lädt aus Defaults)
     init() {
-        activeColor     = Self.loadColor(forKey: Keys.activeColor)     ?? Color(NSColor.systemBlue)
-        inactiveColor   = Self.loadColor(forKey: Keys.inactiveColor)   ?? Color(NSColor.systemGray)
-        normalColor     = Self.loadColor(forKey: Keys.normalColor)     ?? Color(NSColor.controlAccentColor)
-        backgroundColor = Self.loadColor(forKey: Keys.backgroundColor) ?? Color.black.opacity(0.75)
+        // Farben aus Hex
+        activeColor     = AppSettings.color(fromHex: Defaults[.activeColorHex])     ?? Color(nsColor: .systemBlue)
+        inactiveColor   = AppSettings.color(fromHex: Defaults[.inactiveColorHex])   ?? Color(nsColor: .systemGray)
+        normalColor     = AppSettings.color(fromHex: Defaults[.normalColorHex])     ?? Color(nsColor: .systemGray)
+        backgroundColor = AppSettings.color(fromHex: Defaults[.backgroundColorHex]) ?? Color.black.opacity(0.78)
 
-        buttonMaxWidth  = ud.object(forKey: Keys.buttonMaxWidth) as? CGFloat ?? 300
-        buttonPadding   = ud.object(forKey: Keys.buttonPadding)   as? CGFloat ?? 6
-        buttonSpacing   = ud.object(forKey: Keys.buttonSpacing)   as? CGFloat ?? 6
-        pollInterval    = ud.object(forKey: Keys.pollInterval)    as? TimeInterval ?? 0.12
-        groupByApp      = ud.object(forKey: Keys.groupByApp)      as? Bool ?? true
-        showIcons       = ud.object(forKey: Keys.showIcons)       as? Bool ?? true
+        // Layout / Verhalten
+        buttonMaxWidth  = CGFloat(Defaults[.buttonMaxWidth])
+        buttonPadding   = CGFloat(Defaults[.buttonPadding])
+        buttonSpacing   = CGFloat(Defaults[.buttonSpacing])
+        pollInterval    = TimeInterval(Defaults[.pollInterval])
+        groupByApp      = Defaults[.groupByApp]
+        showIcons       = Defaults[.showIcons]
 
+        // Änderungen automatisch in Defaults spiegeln
         setUpBindings()
     }
 
+    // MARK: - Bindings (schreiben nach Defaults)
     private func setUpBindings() {
-        $activeColor.sink { Self.saveColor($0, forKey: Keys.activeColor) }.store(in: &cancellables)
-        $inactiveColor.sink { Self.saveColor($0, forKey: Keys.inactiveColor) }.store(in: &cancellables)
-        $normalColor.sink { Self.saveColor($0, forKey: Keys.normalColor) }.store(in: &cancellables)
-        $backgroundColor.sink { Self.saveColor($0, forKey: Keys.backgroundColor) }.store(in: &cancellables)
-
-        $buttonMaxWidth.sink { [weak self] in self?.ud.set($0, forKey: Keys.buttonMaxWidth) }.store(in: &cancellables)
-        $buttonPadding.sink { [weak self] in self?.ud.set($0, forKey: Keys.buttonPadding) }.store(in: &cancellables)
-        $buttonSpacing.sink { [weak self] in self?.ud.set($0, forKey: Keys.buttonSpacing) }.store(in: &cancellables)
-        $pollInterval.sink { [weak self] in self?.ud.set($0, forKey: Keys.pollInterval) }.store(in: &cancellables)
-        $groupByApp.sink { [weak self] in self?.ud.set($0, forKey: Keys.groupByApp) }.store(in: &cancellables)
-        $showIcons.sink { [weak self] in self?.ud.set($0, forKey: Keys.showIcons) }.store(in: &cancellables)
-    }
-
-    // MARK: - Color Storage Helpers
-    private static func saveColor(_ color: Color, forKey key: String) {
-        #if canImport(AppKit)
-        let nsColor = NSColor(color)
-        if let data = try? NSKeyedArchiver.archivedData(withRootObject: nsColor,
-                                                       requiringSecureCoding: false) {
-            UserDefaults.standard.set(data, forKey: key)
+        // Farben → Hex in Defaults
+        _ = $activeColor.sink { [weak self] newValue in
+            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
+            Defaults[.activeColorHex] = hex
         }
-        #endif
+        _ = $inactiveColor.sink { [weak self] newValue in
+            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
+            Defaults[.inactiveColorHex] = hex
+        }
+        _ = $normalColor.sink { [weak self] newValue in
+            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
+            Defaults[.normalColorHex] = hex
+        }
+        _ = $backgroundColor.sink { [weak self] newValue in
+            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
+            Defaults[.backgroundColorHex] = hex
+        }
+
+        // Layout / Verhalten
+        _ = $buttonMaxWidth.sink { Defaults[.buttonMaxWidth] = Double($0) }
+        _ = $buttonPadding.sink { Defaults[.buttonPadding]   = Double($0) }
+        _ = $buttonSpacing.sink { Defaults[.buttonSpacing]   = Double($0) }
+        _ = $pollInterval.sink   { Defaults[.pollInterval]   = Double($0) }
+        _ = $groupByApp.sink     { Defaults[.groupByApp]     = $0 }
+        _ = $showIcons.sink      { Defaults[.showIcons]      = $0 }
     }
 
-    private static func loadColor(forKey key: String) -> Color? {
+    // MARK: - Color <-> Hex Helpers
+    /// Hex (#RRGGBBAA) → Color
+    private static func color(fromHex hex: String) -> Color? {
+        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 8 || s.count == 6 else { return nil }
+
+        var rgba: UInt64 = 0
+        guard Scanner(string: s).scanHexInt64(&rgba) else { return nil }
+
+        let r, g, b, a: CGFloat
+        if s.count == 8 {
+            r = CGFloat((rgba & 0xFF00_0000) >> 24) / 255
+            g = CGFloat((rgba & 0x00FF_0000) >> 16) / 255
+            b = CGFloat((rgba & 0x0000_FF00) >> 8)  / 255
+            a = CGFloat( rgba & 0x0000_00FF)        / 255
+        } else {
+            r = CGFloat((rgba & 0xFF00_00) >> 16) / 255
+            g = CGFloat((rgba & 0x00FF_00) >> 8)  / 255
+            b = CGFloat( rgba & 0x0000_FF)        / 255
+            a = 1.0
+        }
+        return Color(.sRGB, red: r, green: g, blue: b, opacity: a)
+    }
+
+    /// Color → Hex (#RRGGBBAA)
+    private static func hex(from color: Color) -> String? {
         #if canImport(AppKit)
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let nsColor = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NSColor.self, from: data)
-        else { return nil }
-        return Color(nsColor: nsColor)
+        let ns = NSColor(color)
+            .usingColorSpace(.sRGB) ?? color.nsColor // fallback
+        let r = UInt8((ns.redComponent   * 255.0).rounded())
+        let g = UInt8((ns.greenComponent * 255.0).rounded())
+        let b = UInt8((ns.blueComponent  * 255.0).rounded())
+        let a = UInt8((ns.alphaComponent * 255.0).rounded())
+        return String(format: "#%02X%02X%02X%02X", r, g, b, a)
         #else
         return nil
         #endif
     }
+}
+
+private extension Color {
+    #if canImport(AppKit)
+    var nsColor: NSColor { NSColor(self) }
+    #endif
 }

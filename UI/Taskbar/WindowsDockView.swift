@@ -18,7 +18,8 @@ struct WindowsDockView: View {
             return CGDirectDisplayID(num)
         }()
 
-        let windowsForScreen = scanner.windows.filter { sameDisplay($0.screen, screen) }
+        let did = displayID(for: screen)
+        let windowsForScreen = scanner.windows.filter { $0.displayID == did }
         let grouped = groupedByAppPreservingOrder(windowsForScreen)
 
         ScrollView(.horizontal, showsIndicators: false) {
@@ -210,9 +211,11 @@ struct WindowsDockView: View {
         return nil
     }
 
-    private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
-        let key = NSDeviceDescriptionKey("NSScreenNumber")
-        return (screen.deviceDescription[key] as? NSNumber).map { CGDirectDisplayID($0.uint32Value) }
+    func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        guard
+            let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        else { return nil }
+        return CGDirectDisplayID(num.uint32Value)
     }
 
     private func sameDisplay(_ a: NSScreen, _ b: NSScreen) -> Bool {
