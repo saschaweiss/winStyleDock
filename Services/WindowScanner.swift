@@ -237,6 +237,7 @@ final class WindowScanner: ObservableObject {
                     windowID: winID,
                     appName: appName,
                     title: finalTitle,
+                    displayID: displayID(for: screen),   // << NEU
                     screen: screen,
                     axElement: axWindow,
                     minimized: isMin,
@@ -347,6 +348,13 @@ final class WindowScanner: ObservableObject {
         let sub = axString(w, kAXSubroleAttribute as CFString)
         if sub.isEmpty { return true }
         return ["AXStandardWindow", "AXDocumentWindow"].contains(sub)
+    }
+    
+    // MARK: - Helpers (zusätzlich zu deinen bestehenden)
+    private func displayID(for screen: NSScreen) -> CGDirectDisplayID {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        let num = (screen.deviceDescription[key] as? NSNumber)?.uint32Value ?? 0
+        return CGDirectDisplayID(num)
     }
 
     /// Stabile WindowID: AXWindowNumber → CGWindowList-Matching → Pointer-Fallback

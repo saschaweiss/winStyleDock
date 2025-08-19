@@ -12,6 +12,12 @@ struct WindowsDockView: View {
     @State private var hoveredID: UUID?
 
     var body: some View {
+        let currentDisplayID: CGDirectDisplayID = {
+            let key = NSDeviceDescriptionKey("NSScreenNumber")
+            let num = (screen.deviceDescription[key] as? NSNumber)?.uint32Value ?? 0
+            return CGDirectDisplayID(num)
+        }()
+
         let windowsForScreen = scanner.windows.filter { sameDisplay($0.screen, screen) }
         let grouped = groupedByAppPreservingOrder(windowsForScreen)
 

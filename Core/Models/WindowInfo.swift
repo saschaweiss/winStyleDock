@@ -20,6 +20,7 @@ public struct WindowInfo: Identifiable, Equatable {
     public let windowID: WindowID
     public let appName: String
     public let title: String
+    public let displayID: CGDirectDisplayID   // << NEU
     public let screen: NSScreen
     public let axElement: AXUIElement
     public var minimized: Bool
@@ -29,6 +30,7 @@ public struct WindowInfo: Identifiable, Equatable {
                 windowID: WindowID,
                 appName: String,
                 title: String,
+                displayID: CGDirectDisplayID,        // << NEU
                 screen: NSScreen,
                 axElement: AXUIElement,
                 minimized: Bool,
@@ -38,6 +40,7 @@ public struct WindowInfo: Identifiable, Equatable {
         self.windowID = windowID
         self.appName = appName
         self.title = title
+        self.displayID = displayID                 // << NEU
         self.screen = screen
         self.axElement = axElement
         self.minimized = minimized
