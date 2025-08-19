@@ -30,16 +30,20 @@ final class WindowScanner: ObservableObject {
     static let shared = WindowScanner()
 
     func start(interval: TimeInterval = 0.12) {
-        func start() {
-            stop()
-            let interval = AppTheme.shared.taskbar.scanInterval
-            let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-                self?.scanTick()
+        stopAutoScan()
+
+        // Timer-Closure ist @Sendable → nicht direkt self aufrufen, sondern auf MainActor hoppen
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.scanTick()
             }
-            t.tolerance = interval * 0.3
-            self.timer = t
-            print("🔎 WindowScanner started (interval=\(interval)s)")
-            scanTick()
+        }
+        timer?.tolerance = interval * 0.3
+
+        // ersten Scan sofort & actor-sicher starten
+        Task { @MainActor in
+            self.scanTick()
         }
     }
 
@@ -115,10 +119,17 @@ final class WindowScanner: ObservableObject {
         // Pending-State kurz puffern (Scan respektiert das eine Weile)
         pendingStates[axWindow] = (!isMin, !isMain, Date())
 
-        // Nach kurzer Gnadenfrist App-weit refreshen (stabilisiert Status)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(pendingGrace * 1_000_000_000))
-            self.refreshApp(pid: pid, grace: pendingGrace)
+        // Nach kurzer Gnadenfrist die App-Fenster frisch einlesen (actor-sicher)
+        Task.detached { [weak self, pid] in
+            // 150 ms warten (Off-Main)
+            try? await Task.sleep(nanoseconds: 150_000_000)
+
+            // Zurück auf den MainActor, dort Theme lesen und refreshen
+            await MainActor.run {
+                guard let self = self else { return }
+                let grace = AppTheme.shared.taskbar.pendingGrace
+                self.refreshApp(pid: pid, grace: grace)
+            }
         }
     }
 
