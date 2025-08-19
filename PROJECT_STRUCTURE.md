@@ -2,8 +2,8 @@
 
 > Ziel: Windows-ähnliche Taskbar für macOS (>= 15.x) mit stabiler Reihenfolge,
 > minimalem Flackern, Multi-Monitor-Support und konfigurierbarem Theme.
->
-> App/
+
+App/
 ├─ MainApp.swift # @main; setzt App-Delegate & startet die App
 ├─ DockAppDelegate.swift # Lebenszyklus; startet DockWindowManager
 └─ ContentView.swift # (optional) Platzhalter/Debug-Fenster
@@ -39,3 +39,16 @@ Assets.xcassets/ # AppIcon, Farben
 winstyledock.entitlements # Accessibility, Screen Recording etc. (falls nötig)
 Docs/
 └─ PROJECT_STRUCTURE.md # Diese Datei
+
+## Datenfluss (High Level)
+
+- **DockWindowManager** (MainActor) erstellt pro **NSScreen** ein **NSPanel** mit einer **WindowsDockView(scanner:screen:)**.
+- **WindowScanner** scannt (Hintergrund) via AX+CG, baut eine geordnete `[WindowInfo]`, die **WindowsDockView** rendert.
+- **AppTheme.shared** (MainActor) liefert Farben/Abstände/Zeiten (in UI & Manager benutzt).
+
+## Wichtige Prinzipien
+
+- **MainActor**: Alles, was UI/NSPanel/Theme betrifft → MainActor.
+- **Scanner im Hintergrund**, UI-Update auf Main.
+- **Stabile Reihenfolge** über `WindowID` (PID + CGWindowNumber).
+- **PendingStates** puffern UI nach Toggle (kein „Springen“).
