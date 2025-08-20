@@ -196,7 +196,7 @@ final class WindowScanner: ObservableObject {
         }
 
         var mainRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(axWindow, kAXMainAttribute as CFString, &mainRef)
+        AXUIElementCopyAttributeValue(axElement, kAXMainAttribute as CFString, &mainRef)
         let isMain = (mainRef as? Bool) ?? false
 
         var pid: pid_t = 0
@@ -211,18 +211,18 @@ final class WindowScanner: ObservableObject {
 
         if isMin {
             // Wiederherstellen + nach vorn
-            _ = AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-            _ = AXUIElementSetAttributeValue(axWindow, kAXMainAttribute as CFString, kCFBooleanTrue)
+            _ = AXUIElementSetAttributeValue(axElement, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            _ = AXUIElementSetAttributeValue(axElement, kAXMainAttribute as CFString, kCFBooleanTrue)
             app.activate(options: [.activateAllWindows])
         } else {
             // Minimieren – robust mit Fallbacks
             var didMinimize = false
 
-            if AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
+            if AXUIElementSetAttributeValue(axElement, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
                 didMinimize = true
             } else {
                 var btnRef: CFTypeRef?
-                if AXUIElementCopyAttributeValue(axWindow, kAXMinimizeButtonAttribute as CFString, &btnRef) == .success,
+                if AXUIElementCopyAttributeValue(axElement, kAXMinimizeButtonAttribute as CFString, &btnRef) == .success,
                    let raw = btnRef {
                     let btn = unsafeBitCast(raw, to: AXUIElement.self)
                     if AXUIElementPerformAction(btn, kAXPressAction as CFString) == .success {
@@ -237,7 +237,7 @@ final class WindowScanner: ObservableObject {
         }
 
         // Pending-State puffern
-        pendingStates[axWindow] = (!isMin, !isMain, Date())
+        pendingStates[axElement] = (!isMin, !isMain, Date())
 
         // Kleiner verzögerter Refresh (stabilisiert den Status nach Toggle)
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15) { [weak self, pid] in
@@ -445,32 +445,32 @@ fileprivate enum ScanUtil {
                 NSLog("🔹 \(appName): \(axWindows.count) AX windows")
             }
 
-            for axWindow in axWindows {
+            for axElement in axWindows {
                 if DEBUG_VERBOSE {
-                    let dbgTitle = axString(axWindow, kAXTitleAttribute as CFString)
-                    let dbgRole  = axString(axWindow, kAXRoleAttribute as CFString)
-                    let dbgSub   = axString(axWindow, kAXSubroleAttribute as CFString)
+                    let dbgTitle = axString(axElement, kAXTitleAttribute as CFString)
+                    let dbgRole  = axString(axElement, kAXRoleAttribute as CFString)
+                    let dbgSub   = axString(axElement, kAXSubroleAttribute as CFString)
                     NSLog("   • title='\(dbgTitle)' role='\(dbgRole)' subrole='\(dbgSub)'")
                 }
 
                 // Skip our own process windows (Panels/Settings)
                 var winPid: pid_t = 0
-                AXUIElementGetPid(axWindow, &winPid)
+                AXUIElementGetPid(axElement, &winPid)
                 if winPid == selfPid { continue }
 
-                guard isTopLevelNormalWindow(axWindow) else { continue }
+                guard isTopLevelNormalWindow(axElement) else { continue }
 
-                let title = axString(axWindow, kAXTitleAttribute as CFString)
-                let isMin  = isMinimized(axWindow)
-                let isMain = isMainWindow(axWindow)
-                let frame  = getFrame(axWindow)
+                let title = axString(axElement, kAXTitleAttribute as CFString)
+                let isMin  = isMinimized(window.axElement)
+                let isMain = isMainWindow(window.axElement)
+                let frame  = getFrame(window.axElement)
 
                 // Nur sichtbare nicht-minimierte Fenster; minimierte behalten wir
                 let intersects = NSScreen.screens.contains { $0.frame.intersects(frame) }
                 if !isMin && !intersects { continue }
                 
                 // Stabile ID mit bereits übergebenem cgInfo (keine Extra-Systemcalls)
-                guard let winID = windowID(for: axWindow, cgInfo: cgInfo) else { continue }
+                guard let winID = windowID(for: axElement, cgInfo: cgInfo) else { continue }
                 // Stabile ID mit bereits übergebenem cgInfo (keine Extra-Systemcalls)
 
                 // Screen bestimmen (sichtbar → prev → main)
@@ -512,7 +512,7 @@ fileprivate enum ScanUtil {
                     title: effectiveTitle,
                     displayID: displayID(for: screen),
                     screen: screen,
-                    axElement: axWindow,
+                    axElement: axElement,
                     minimized: isMin,
                     isMain: isMain
                 )
@@ -558,13 +558,13 @@ fileprivate enum ScanUtil {
         return frame
     }
 
-    private static func isMinimized(_ el: AXUIElement) -> Bool {
+    private static func isMinimized(_ axElement: AXUIElement) -> Bool {
         var ref: CFTypeRef?
         AXUIElementCopyAttributeValue(el, kAXMinimizedAttribute as CFString, &ref)
         return (ref as? Bool) ?? false
     }
 
-    private static func isMainWindow(_ el: AXUIElement) -> Bool {
+    private static func isMainWindow(_ axElement: AXUIElement) -> Bool {
         var ref: CFTypeRef?
         AXUIElementCopyAttributeValue(el, kAXMainAttribute as CFString, &ref)
         return (ref as? Bool) ?? false
