@@ -12,12 +12,16 @@ Core/<br>
 ├─ Config/<br>
 │ └─ AppTheme.swift # @MainActor Singleton: Farben, Abstände, Zeiten<br>
 └─ Models/<br>
-├─ AppSettings.swift # UserDefaults-basierte Settings (optional)<br>
-└─ WindowInfo.swift # WindowID + WindowInfo Datenmodell<br>
+├─├─ AppSettings.swift # UserDefaults-basierte Settings (optional)<br>
+│ └─WindowInfo.swift # WindowID + WindowInfo Datenmodell<br>
 <br>
 Infrastructure/<br>
 └─ Windowing/<br>
-└─ DockWindowManager.swift # @MainActor; erstellt/managed NSPanels je Screen<br>
+│ ├─ AXWindowBackend.swift<br>
+│ ├─ DockWindowManager.swift # @MainActor; erstellt/managed NSPanels je Screen<br>
+│ ├─ Edgeguard.swift<br>
+│ ├─ SwindlerBackend.swift<br>
+│ └─ WindowBackend.swift<br>
 <br>
 Managers/<br>
 └─ PermissionsManager.swift # Accessibility-Rechte prüfen/erzwingen<br>
