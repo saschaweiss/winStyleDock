@@ -1,21 +1,18 @@
-import Foundation
 import Defaults
 
-// Zentrale Schlüssel für Settings
+// Alle Settings-Schlüssel an EINER Stelle, ASCII-only, keine Punkte/Prefix '@'.
 extension Defaults.Keys {
-    // Farben (als Hex mit Alpha)
-    static let activeColorHex     = Key<String>("settings.activeColorHex", default: "#2680FFFF") // blau
-    static let inactiveColorHex   = Key<String>("settings.inactiveColorHex", default: "#80808099") // grau 60%
-    static let normalColorHex     = Key<String>("settings.normalColorHex", default: "#8080808C")   // grau 55%
-    static let backgroundColorHex = Key<String>("settings.backgroundColorHex", default: "#000000C7") // schwarz ~78%
+    // Farben als Hex (#RRGGBBAA)
+    static let activeColorHex      = Key<String>("activeColorHex",      default: "#3B82F6FF") // Blau
+    static let inactiveColorHex    = Key<String>("inactiveColorHex",    default: "#9CA3AFFF") // Grau hell
+    static let normalColorHex      = Key<String>("normalColorHex",      default: "#64748BFF") // Slate
+    static let backgroundColorHex  = Key<String>("backgroundColorHex",  default: "#000000C0") // Schwarz 75%
 
-    // Layout
-    static let buttonMaxWidth     = Key<Double>("settings.buttonMaxWidth", default: 300)
-    static let buttonPadding      = Key<Double>("settings.buttonPadding", default: 6)
-    static let buttonSpacing      = Key<Double>("settings.buttonSpacing", default: 6)
-
-    // Verhalten
-    static let pollInterval       = Key<Double>("settings.pollInterval", default: 0.12)
-    static let groupByApp         = Key<Bool>("settings.groupByApp", default: true)
-    static let showIcons          = Key<Bool>("settings.showIcons", default: true)
+    // Layout/Verhalten
+    static let buttonMaxWidth      = Key<Double>("buttonMaxWidth",      default: 300)
+    static let buttonPadding       = Key<Double>("buttonPadding",       default: 6)
+    static let buttonSpacing       = Key<Double>("buttonSpacing",       default: 6)
+    static let pollInterval        = Key<Double>("pollInterval",        default: 0.12)
+    static let groupByApp          = Key<Bool>("groupByApp",            default: true)
+    static let showIcons           = Key<Bool>("showIcons",             default: true)
 }

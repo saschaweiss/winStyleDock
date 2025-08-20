@@ -35,6 +35,34 @@ struct SettingsView: View {
                     Text("\(Int(settings.buttonSpacing)) pt").foregroundStyle(.secondary)
                 }
                 Slider(value: $settings.buttonSpacing, in: 0...24, step: 1)
+                
+                HStack {
+                    Text("Minimale Breite")
+                    Spacer()
+                    Text("\(Int(AppTheme.shared.taskbar.minButtonWidth)) pt")
+                        .foregroundColor(.secondary)
+                }
+                Slider(
+                    value: Binding(
+                        get: { AppTheme.shared.taskbar.minButtonWidth },
+                        set: { AppTheme.shared.taskbar.minButtonWidth = max(40, min($0, AppTheme.shared.taskbar.maxButtonWidth - 20)) } // min 40, mind. 20pt kleiner als max
+                    ),
+                    in: 40...400
+                )
+
+                HStack {
+                    Text("Maximale Breite")
+                    Spacer()
+                    Text("\(Int(AppTheme.shared.taskbar.maxButtonWidth)) pt")
+                        .foregroundColor(.secondary)
+                }
+                Slider(
+                    value: Binding(
+                        get: { AppTheme.shared.taskbar.maxButtonWidth },
+                        set: { AppTheme.shared.taskbar.maxButtonWidth = max($0, AppTheme.shared.taskbar.minButtonWidth + 20) } // immer über min
+                    ),
+                    in: 120...480
+                )
             }
 
             // MARK: Verhalten
@@ -51,7 +79,7 @@ struct SettingsView: View {
             }
         }
         .padding()
-        .frame(minWidth: 460, minHeight: 420)
+        .frame(minWidth: 460, minHeight: 620)
     }
 }
 

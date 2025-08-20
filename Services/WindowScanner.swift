@@ -10,17 +10,54 @@ final class WindowScanner: ObservableObject {
 
     private var timer: Timer?
     private var scanInterval: TimeInterval = 0.12
+    
+    // ↓ direkt unter den bestehenden Properties einfügen
+    private var lastScreenCount: [CGDirectDisplayID: Int] = [:]
+    private var lastScreenLogAt: Date = .distantPast
+    private let screenLogMinInterval: TimeInterval = 1.0
 
     /// Reihenfolge stabil halten
     private var stableOrder = OrderedSet<WindowID>()
 
     /// Pending-UI (Entprellung)
     var pendingStates: [AXUIElement: (minimized: Bool, isMain: Bool, timestamp: Date)] = [:]
+    
+    // --- Debounce gegen Flackern ---
+    private var seenCount: [WindowID: Int] = [:]      // wie oft in Folge gesehen
+    private var missCount: [WindowID: Int] = [:]      // wie oft in Folge NICHT gesehen
+
+    /// Ab wann ein NEUES Fenster wirklich aufgenommen wird (Scans in Folge)
+    private let appearThreshold = 2     // 2 Scans ≈ ~240ms bei 120ms Intervall
+
+    /// Ab wann ein NICHT mehr gesehenes Fenster wirklich entfernt wird
+    private let disappearThreshold = 3  // 3 Scans ≈ ~360ms
+
+    // Titel-Entprellung
+    private var lastTitle: [WindowID: String] = [:]
+    private var titleStableCount: [WindowID: Int] = [:]
+    private let titleConfirmScans = 2   // Titel muss in 2 Scans stabil sein, bevor wir UI updaten
 
     /// Scans nicht überlappen lassen
     private var isScanInFlight = false
 
     private let pendingGrace: TimeInterval = 0.35
+    
+    /// Per-PID AXObserver, damit wir Fokus/Minimize/WindowCreate-Events bekommen
+    private var observers: [pid_t: AXObserver] = [:]
+    
+    /// Workspace-Observer für App-Start/-Ende
+    private var wsLaunchObs: NSObjectProtocol?
+    private var wsTerminateObs: NSObjectProtocol?
+    
+    // --- Anti-Flackern: Sichtbarkeits-Hysterese ---
+    private var firstSeenAt: [WindowID: Date] = [:]   // erstes Auftauchen
+    private var lastSeenAt:  [WindowID: Date] = [:]   // letztes Mal gesehen
+
+    /// Wie lange ein neues Fenster stabil "gesehen" sein muss, bevor wir es anzeigen
+    private let appearConfirm: TimeInterval = 0.25
+
+    /// Wie lange ein verschwundenes Fenster fehlen darf, bevor wir es ausblenden
+    private let vanishGrace: TimeInterval = 0.40
 
     // MARK: - Singleton
     static let shared = WindowScanner()
@@ -29,6 +66,29 @@ final class WindowScanner: ObservableObject {
     func start(interval: TimeInterval = 0.12) {
         stop()
         scanInterval = interval
+        prewarm()
+        
+        // AX-Events für bereits laufende Apps
+        registerAXObserversForRunningApps()
+
+        // Wenn neue Apps starten oder beendet werden → Observer (de)registrieren
+        wsLaunchObs = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self?.registerAXObserver(for: app)
+        }
+
+        wsTerminateObs = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self?.unregisterAXObserver(forPID: app.processIdentifier)
+        }
 
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -43,6 +103,27 @@ final class WindowScanner: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        
+        if let o = wsLaunchObs { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        if let o = wsTerminateObs { NSWorkspace.shared.notificationCenter.removeObserver(o) }
+        wsLaunchObs = nil
+        wsTerminateObs = nil
+
+        for (_, obs) in observers {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+        }
+        observers.removeAll()
+    }
+    
+    /// Führt sofort einen vollständigen Scan aus und setzt `windows` direkt.
+    /// Verhindert, dass die ersten Buttons erst nach dem ersten Timer-Tick erscheinen.
+    @MainActor
+    func prewarm() {
+        // Kleines Timeout, damit wir bei „zickigen“ Apps nicht hängen
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.05)
+        // performScan läuft off-main – wir triggern den Weg über scanTick(),
+        // damit Reihenfolge/Pending-Logik umgangen wird.
+        self.scanTick()
     }
 
     @MainActor
@@ -83,19 +164,36 @@ final class WindowScanner: ObservableObject {
                 }
 
                 self.windows = final
+                self.logScreenCountsIfChanged(final) // <- NEU
                 self.isScanInFlight = false
             }
         }
     }
 
     // MARK: - Toggle (Minimieren / Wiederherstellen / Vordergrund)
+    @MainActor
     func toggleWindow(_ window: WindowInfo) {
-        let axWindow = window.axElement
+        let ax = window.axElement
 
         // Zustand lesen
         var minRef: CFTypeRef?
-        AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &minRef)
+        AXUIElementCopyAttributeValue(ax, kAXMinimizedAttribute as CFString, &minRef)
         let isMin = (minRef as? Bool) ?? false
+
+        if isMin {
+            _ = WindowSystem.backend.restore(axElement: ax)
+        } else {
+            // Wenn es Main/aktiv ist → minimieren, sonst in den Vordergrund
+            var mainRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(ax, kAXMainAttribute as CFString, &mainRef)
+            let isMain = (mainRef as? Bool) ?? false
+
+            if isMain {
+                _ = WindowSystem.backend.minimize(axElement: ax)
+            } else {
+                _ = WindowSystem.backend.bringToFront(axElement: ax)
+            }
+        }
 
         var mainRef: CFTypeRef?
         AXUIElementCopyAttributeValue(axWindow, kAXMainAttribute as CFString, &mainRef)
@@ -178,6 +276,31 @@ final class WindowScanner: ObservableObject {
         }
     }
     
+    /// Loggt pro Display die Fensteranzahl – aber nur bei Änderung und max. 1×/s.
+    private func logScreenCountsIfChanged(_ windows: [WindowInfo]) {
+        let now = Date()
+        // Throttling
+        guard now.timeIntervalSince(lastScreenLogAt) >= screenLogMinInterval else { return }
+
+        // aktuelle Counts bauen
+        var counts: [CGDirectDisplayID: Int] = [:]
+        for w in windows {
+            counts[w.displayID, default: 0] += 1
+        }
+
+        // nur loggen, wenn sich etwas geändert hat
+        guard counts != lastScreenCount else { return }
+        lastScreenCount = counts
+        lastScreenLogAt = now
+
+        // kompakt ausgeben
+        let line = counts
+            .sorted(by: { $0.key < $1.key })
+            .map { "Screen \($0.key): \($0.value) Fenster" }
+            .joined(separator: " | ")
+        NSLog("🧭 \(line)")
+    }
+    
     // Services/WindowScanner.swift  (innerhalb von class WindowScanner)
     @discardableResult
     private func minimizeViaAppleScript(pid: pid_t) -> Bool {
@@ -215,10 +338,66 @@ final class WindowScanner: ObservableObject {
         }
         return result.booleanValue
     }
+    
+    /// Für alle aktuell laufenden, „normalen“ Apps Observer setzen
+    private func registerAXObserversForRunningApps() {
+        for app in NSWorkspace.shared.runningApplications {
+            registerAXObserver(for: app)
+        }
+    }
+
+    /// Für genau eine App Observer setzen (falls sinnvoll)
+    private func registerAXObserver(for app: NSRunningApplication) {
+        guard app.activationPolicy == .regular else { return }
+        guard let _ = app.localizedName else { return }
+        let pid = app.processIdentifier
+        guard observers[pid] == nil else { return } // schon vorhanden
+
+        var observer: AXObserver?
+        let err = AXObserverCreate(pid, { (_, _, _, refcon) in
+            // AX Callback -> auf Main hoppen → schneller kleiner Tick
+            guard let refcon = refcon else { return }
+            let unmanaged = Unmanaged<WindowScanner>.fromOpaque(refcon).takeUnretainedValue()
+            Task { @MainActor in
+                unmanaged.scanTick()
+            }
+        }, &observer)
+
+        guard err == .success, let obs = observer else { return }
+
+        // typische Notifications – nicht jede App schickt alle; ist okay
+        let appAX = AXUIElementCreateApplication(pid)
+        func add(_ name: String) {
+            let err = AXObserverAddNotification(obs, appAX, name as CFString, Unmanaged.passUnretained(self).toOpaque())
+            if err != .success {
+                NSLog("AXObserverAddNotification failed for \(app.localizedName ?? "?") / \(name): \(err.rawValue)")
+            }
+        }
+
+        add(kAXWindowCreatedNotification)
+        add(kAXUIElementDestroyedNotification)
+        add(kAXFocusedWindowChangedNotification)
+        add(kAXMainWindowChangedNotification)
+        add(kAXTitleChangedNotification)
+
+        observers[pid] = obs
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+    }
+
+    /// Observer entfernen, z. B. bei App-Terminate
+    private func unregisterAXObserver(forPID pid: pid_t) {
+        guard let obs = observers.removeValue(forKey: pid) else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+    }
 }
 
 // MARK: - Off-main Scan Utility
 fileprivate enum ScanUtil {
+    // Titel-Entprellung (ScanUtil-interner Zustand)
+    private static var lastTitle: [WindowID: String] = [:]
+    private static var titleStableCount: [WindowID: Int] = [:]
+    private static let titleConfirmScans: Int = 2
+
     // Debug-Flags
     private static let DEBUG_VERBOSE = false           // Fenster-Details pro Tick
     private static let RELAX_ROLE_FILTER = false       // in DEV ggf. true setzen
@@ -226,11 +405,10 @@ fileprivate enum ScanUtil {
     // Sichtbarer einmal-Log pro PID (wenn AX nicht zugreifbar)
     private static var warnedPIDs = Set<pid_t>()
 
-    /// Führt den kompletten Fenster-Scan aus (off-main!)
-    static func performScan(prev: [WindowInfo],
-                            order: [WindowID],
-                            cgInfo: [[String: Any]]) -> (updated: [WindowInfo], newOrder: [WindowID]) {
-
+    /// Führt den kompletten Fenster-Scan aus (off-main!).
+    /// Diese Utility-Funktion ist **rein funktional**: Sie hält keinen Bezug auf
+    /// WindowScanner-Instanzzustand. Debounce/Pending/Grace werden außerhalb gehandhabt.
+    static func performScan(prev: [WindowInfo], order: [WindowID], cgInfo: [[String: Any]]) -> (updated: [WindowInfo], newOrder: [WindowID]) {
         var windowList: [WindowInfo] = []
 
         let selfPid: pid_t = getpid()
@@ -240,6 +418,7 @@ fileprivate enum ScanUtil {
         for app in NSWorkspace.shared.runningApplications {
             guard let appName = app.localizedName else { continue }
 
+            // System und eigene App ausblenden
             if ["Dock", "loginwindow", "Window Server"].contains(appName) { continue }
             if app.processIdentifier == selfPid { continue }
             if let bid = app.bundleIdentifier, let selfBid = selfBundleID, bid == selfBid { continue }
@@ -254,7 +433,9 @@ fileprivate enum ScanUtil {
                     warnedPIDs.insert(app.processIdentifier)
                     if app.activationPolicy == .regular,
                        (app.localizedName?.range(of: "Helper", options: .caseInsensitive) == nil) {
+                        #if DEBUG
                         NSLog("⚪️ \(app.localizedName ?? "?"): kAXWindowsAttribute not accessible (pid \(app.processIdentifier))")
+                        #endif
                     }
                 }
                 continue
@@ -284,28 +465,51 @@ fileprivate enum ScanUtil {
                 let isMain = isMainWindow(axWindow)
                 let frame  = getFrame(axWindow)
 
-                // Nur sichtbare nicht-minimierte
+                // Nur sichtbare nicht-minimierte Fenster; minimierte behalten wir
                 let intersects = NSScreen.screens.contains { $0.frame.intersects(frame) }
                 if !isMin && !intersects { continue }
-
-                // 1) stabile ID – jetzt mit bereits bereitgestellter cgInfo (kein weiterer System-Call)
+                
+                // Stabile ID mit bereits übergebenem cgInfo (keine Extra-Systemcalls)
                 guard let winID = windowID(for: axWindow, cgInfo: cgInfo) else { continue }
+                // Stabile ID mit bereits übergebenem cgInfo (keine Extra-Systemcalls)
 
-                // 2) Screen
+                // Screen bestimmen (sichtbar → prev → main)
                 let screen: NSScreen = {
                     if let s = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) { return s }
                     if let old = prev.first(where: { $0.windowID == winID }) { return old.screen }
                     return NSScreen.main ?? NSScreen.screens.first!
                 }()
 
-                let finalTitle = title.isEmpty ? appName : title
+                // Titel mit einfachem Fallback
+                let rawTitle = title.isEmpty ? appName : title
+
+                // Titel-Entprellung (enum-intern, unabhängig vom WindowScanner)
+                let lastAX = Self.lastTitle[winID] ?? rawTitle
+                if rawTitle == lastAX {
+                    Self.titleStableCount[winID] = (Self.titleStableCount[winID] ?? 0) + 1
+                } else {
+                    Self.titleStableCount[winID] = 1
+                    Self.lastTitle[winID] = rawTitle
+                }
+
+                let effectiveTitle: String = {
+                    if (Self.titleStableCount[winID] ?? 0) >= Self.titleConfirmScans {
+                        return rawTitle
+                    } else if let prevTitle = prev.first(where: { $0.windowID == winID })?.title {
+                        return prevTitle
+                    } else {
+                        return rawTitle
+                    }
+                }()
+                
+                // UI-stabile UUID wiederverwenden
                 let stableUUID = prev.first(where: { $0.windowID == winID })?.id ?? UUID()
 
                 let info = WindowInfo(
                     id: stableUUID,
                     windowID: winID,
                     appName: appName,
-                    title: finalTitle,
+                    title: effectiveTitle,
                     displayID: displayID(for: screen),
                     screen: screen,
                     axElement: axWindow,
@@ -319,7 +523,7 @@ fileprivate enum ScanUtil {
             }
         }
 
-        // Reihenfolge stabil halten
+        // Reihenfolge stabil halten (nur anhand der übergebenen `order`)
         var updated: [WindowInfo] = []
         var newOrder = order.filter { id in windowList.contains(where: { $0.windowID == id }) }
 

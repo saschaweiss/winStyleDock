@@ -1,14 +1,15 @@
 import SwiftUI
 import AppKit
 import Defaults
+import Combine
 
 /// Zentrale Settings-Quelle für die UI.
-/// Speichert/liest intern über `Defaults` (statt eigenem UserDefaults-Code).
+/// Speichert/liest über `Defaults` (definierte Keys in Core/Config/DefaultsKeys.swift).
 @MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
-    // MARK: - Published Properties (wie gehabt in deiner UI)
+    // MARK: - Published Properties (von der UI genutzt)
     @Published var activeColor: Color
     @Published var inactiveColor: Color
     @Published var normalColor: Color
@@ -21,15 +22,19 @@ final class AppSettings: ObservableObject {
     @Published var groupByApp: Bool
     @Published var showIcons: Bool
 
-    // MARK: - Init (lädt aus Defaults)
-    init() {
-        // Farben aus Hex
-        activeColor     = AppSettings.color(fromHex: Defaults[.activeColorHex])     ?? Color(nsColor: .systemBlue)
-        inactiveColor   = AppSettings.color(fromHex: Defaults[.inactiveColorHex])   ?? Color(nsColor: .systemGray)
-        normalColor     = AppSettings.color(fromHex: Defaults[.normalColorHex])     ?? Color(nsColor: .systemGray)
-        backgroundColor = AppSettings.color(fromHex: Defaults[.backgroundColorHex]) ?? Color.black.opacity(0.78)
+    private var cancellables: Set<AnyCancellable> = []
 
-        // Layout / Verhalten
+    // MARK: - Init
+    init() {
+        // 1) Einmalige Migration alter Keys (mit Punkten) → neue `Defaults`-Keys
+        Self.migrateLegacyKeysOnce()
+
+        // 2) Initial aus `Defaults` laden
+        activeColor     = Self.color(fromHex: Defaults[.activeColorHex])     ?? Color(NSColor.systemBlue)
+        inactiveColor   = Self.color(fromHex: Defaults[.inactiveColorHex])   ?? Color(NSColor.systemGray)
+        normalColor     = Self.color(fromHex: Defaults[.normalColorHex])     ?? Color(NSColor.controlAccentColor)
+        backgroundColor = Self.color(fromHex: Defaults[.backgroundColorHex]) ?? Color.black.opacity(0.75)
+
         buttonMaxWidth  = CGFloat(Defaults[.buttonMaxWidth])
         buttonPadding   = CGFloat(Defaults[.buttonPadding])
         buttonSpacing   = CGFloat(Defaults[.buttonSpacing])
@@ -37,41 +42,87 @@ final class AppSettings: ObservableObject {
         groupByApp      = Defaults[.groupByApp]
         showIcons       = Defaults[.showIcons]
 
-        // Änderungen automatisch in Defaults spiegeln
+        // 3) Änderungen automatisch in `Defaults` spiegeln
         setUpBindings()
     }
 
-    // MARK: - Bindings (schreiben nach Defaults)
+    // MARK: - Bindings → schreiben nach Defaults
     private func setUpBindings() {
-        // Farben → Hex in Defaults
-        _ = $activeColor.sink { [weak self] newValue in
-            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
-            Defaults[.activeColorHex] = hex
+        // Farben als Hex speichern
+        $activeColor
+            .compactMap { AppSettings.hex(from: $0) }
+            .sink { Defaults[.activeColorHex] = $0 }
+            .store(in: &cancellables)
+
+        $inactiveColor
+            .compactMap { AppSettings.hex(from: $0) }
+            .sink { Defaults[.inactiveColorHex] = $0 }
+            .store(in: &cancellables)
+
+        $normalColor
+            .compactMap { AppSettings.hex(from: $0) }
+            .sink { Defaults[.normalColorHex] = $0 }
+            .store(in: &cancellables)
+
+        $backgroundColor
+            .compactMap { AppSettings.hex(from: $0) }
+            .sink { Defaults[.backgroundColorHex] = $0 }
+            .store(in: &cancellables)
+
+        // Layout/Verhalten
+        $buttonMaxWidth .sink { Defaults[.buttonMaxWidth] = Double($0) }.store(in: &cancellables)
+        $buttonPadding  .sink { Defaults[.buttonPadding]  = Double($0) }.store(in: &cancellables)
+        $buttonSpacing  .sink { Defaults[.buttonSpacing]  = Double($0) }.store(in: &cancellables)
+        $pollInterval   .sink { Defaults[.pollInterval]   = Double($0) }.store(in: &cancellables)
+        $groupByApp     .sink { Defaults[.groupByApp]     = $0 }.store(in: &cancellables)
+        $showIcons      .sink { Defaults[.showIcons]      = $0 }.store(in: &cancellables)
+    }
+
+    // MARK: - Einmalige Migration alter Key-Namen (mit Punkten) → neue ASCII-Keys
+    private static func migrateLegacyKeysOnce() {
+        let ud = UserDefaults.standard
+        let didFlagKey = "settings_migrated_to_ascii_keys_v1"
+        if ud.bool(forKey: didFlagKey) { return } // schon erledigt
+
+        // Alten Key lesen → wenn vorhanden, in neue Defaults schreiben, danach alten löschen
+        func migrateHex(oldKey: String, to newKey: Defaults.Key<String>) {
+            if let hex = ud.string(forKey: oldKey), !hex.isEmpty {
+                Defaults[newKey] = hex
+                ud.removeObject(forKey: oldKey)
+            }
         }
-        _ = $inactiveColor.sink { [weak self] newValue in
-            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
-            Defaults[.inactiveColorHex] = hex
+        func migrateDouble(oldKey: String, to newKey: Defaults.Key<Double>) {
+            if let n = ud.object(forKey: oldKey) as? Double {
+                Defaults[newKey] = n
+                ud.removeObject(forKey: oldKey)
+            }
         }
-        _ = $normalColor.sink { [weak self] newValue in
-            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
-            Defaults[.normalColorHex] = hex
-        }
-        _ = $backgroundColor.sink { [weak self] newValue in
-            guard let self, let hex = AppSettings.hex(from: newValue) else { return }
-            Defaults[.backgroundColorHex] = hex
+        func migrateBool(oldKey: String, to newKey: Defaults.Key<Bool>) {
+            if let b = ud.object(forKey: oldKey) as? Bool {
+                Defaults[newKey] = b
+                ud.removeObject(forKey: oldKey)
+            }
         }
 
-        // Layout / Verhalten
-        _ = $buttonMaxWidth.sink { Defaults[.buttonMaxWidth] = Double($0) }
-        _ = $buttonPadding.sink { Defaults[.buttonPadding]   = Double($0) }
-        _ = $buttonSpacing.sink { Defaults[.buttonSpacing]   = Double($0) }
-        _ = $pollInterval.sink   { Defaults[.pollInterval]   = Double($0) }
-        _ = $groupByApp.sink     { Defaults[.groupByApp]     = $0 }
-        _ = $showIcons.sink      { Defaults[.showIcons]      = $0 }
+        // Farben
+        migrateHex(oldKey: "settings.activeColor",     to: .activeColorHex)
+        migrateHex(oldKey: "settings.inactiveColor",   to: .inactiveColorHex)
+        migrateHex(oldKey: "settings.normalColor",     to: .normalColorHex)
+        migrateHex(oldKey: "settings.backgroundColor", to: .backgroundColorHex)
+
+        // Layout/Verhalten
+        migrateDouble(oldKey: "settings.buttonMaxWidth", to: .buttonMaxWidth)
+        migrateDouble(oldKey: "settings.buttonPadding",  to: .buttonPadding)
+        migrateDouble(oldKey: "settings.buttonSpacing",  to: .buttonSpacing)
+        migrateDouble(oldKey: "settings.pollInterval",   to: .pollInterval)
+        migrateBool(oldKey:   "settings.groupByApp",     to: .groupByApp)
+        migrateBool(oldKey:   "settings.showIcons",      to: .showIcons)
+
+        ud.set(true, forKey: didFlagKey)
     }
 
     // MARK: - Color <-> Hex Helpers
-    /// Hex (#RRGGBBAA) → Color
+    /// Hex (#RRGGBBAA oder #RRGGBB) → Color
     private static func color(fromHex hex: String) -> Color? {
         var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasPrefix("#") { s.removeFirst() }
@@ -86,7 +137,7 @@ final class AppSettings: ObservableObject {
             g = CGFloat((rgba & 0x00FF_0000) >> 16) / 255
             b = CGFloat((rgba & 0x0000_FF00) >> 8)  / 255
             a = CGFloat( rgba & 0x0000_00FF)        / 255
-        } else {
+        } else { // 6-stellig
             r = CGFloat((rgba & 0xFF00_00) >> 16) / 255
             g = CGFloat((rgba & 0x00FF_00) >> 8)  / 255
             b = CGFloat( rgba & 0x0000_FF)        / 255
@@ -98,8 +149,7 @@ final class AppSettings: ObservableObject {
     /// Color → Hex (#RRGGBBAA)
     private static func hex(from color: Color) -> String? {
         #if canImport(AppKit)
-        let ns = NSColor(color)
-            .usingColorSpace(.sRGB) ?? color.nsColor // fallback
+        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor.systemBlue
         let r = UInt8((ns.redComponent   * 255.0).rounded())
         let g = UInt8((ns.greenComponent * 255.0).rounded())
         let b = UInt8((ns.blueComponent  * 255.0).rounded())
@@ -109,10 +159,4 @@ final class AppSettings: ObservableObject {
         return nil
         #endif
     }
-}
-
-private extension Color {
-    #if canImport(AppKit)
-    var nsColor: NSColor { NSColor(self) }
-    #endif
 }

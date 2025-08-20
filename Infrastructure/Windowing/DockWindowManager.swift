@@ -14,6 +14,9 @@ final class DockWindowManager {
     func show() {
         // Scanner starten
         WindowScanner.shared.start()
+        
+        // ⬇️ EdgeGuard aktivieren
+        EdgeGuard.shared.start(using: WindowScanner.shared, barHeight: AppTheme.shared.taskbar.barHeight)
 
         // ⬇️ WICHTIG: MainActor hoppen (nicht synchron aufrufen)
         Task { @MainActor [weak self] in
@@ -34,6 +37,9 @@ final class DockWindowManager {
     }
 
     func hide() {
+        // ⬇️ EdgeGuard stoppen
+        EdgeGuard.shared.stop()
+        
         for panel in panelsByDisplayID.values {
             panel.orderOut(nil)
         }

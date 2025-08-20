@@ -30,6 +30,9 @@ final class AppTheme: ObservableObject {
         var groupGap: CGFloat = 10
         var maxButtonWidth: CGFloat = 300
         var barHeight: CGFloat = 60
+        
+        /// minimale Button-Breite (damit nicht zu schmale Chips entstehen)
+        var minButtonWidth: CGFloat = 84
 
         /// Scan-Intervall, kleiner = weniger Latenz, größer = weniger CPU
         var scanInterval: TimeInterval = 0.12
